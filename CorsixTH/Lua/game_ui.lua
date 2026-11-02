@@ -72,6 +72,8 @@ function GameUI:GameUI(app, local_hospital, map_editor)
   self.zoom_factor = 1
   local efz = self.zoom_factor * TheApp.gfx:getWindowDisplayScale()
   local scr_w, scr_h = app.video:getRenderSize()
+  self.last_render_w = scr_w
+  self.last_render_h = scr_h
 
   -- With the zoom the game screen is the pixel size of the screen divided by
   -- the effective zoom level (zoom_factor * display scale)
@@ -274,16 +276,31 @@ function GameUI:draw(canvas)
 end
 
 function GameUI:onChangeResolution()
+  local scr_w, scr_h = TheApp.video:getRenderSize()
+  local prev_cx, prev_cy
+  if self.last_render_w and self.last_render_h and self.last_render_w > 0 and self.last_render_h > 0 then
+    prev_cx, prev_cy = self:ScreenToWorld(self.last_render_w / 2, self.last_render_h / 2)
+  end
+
   -- Calculate and enforce minimum zoom
   local minimum_zoom = self:calculateMinimumZoom()
   if self.zoom_factor < minimum_zoom then
     self:setZoom(minimum_zoom, false)
   end
   -- Recalculate scrolling bounds
-  local scr_w, scr_h = TheApp.video:getRenderSize()
   local zoom = self:getEffectiveZoom()
   self.visible_diamond = self:makeVisibleDiamond(scr_w / zoom, scr_h / zoom)
-  self:scrollMap(0, 0)
+
+  if prev_cx and prev_cy then
+    local sx, sy = self.app.map:WorldToScreen(prev_cx, prev_cy)
+    local dx, dy = self.app.map:ScreenToWorld(scr_w / 2, scr_h / 2)
+    self:scrollMapTo(sx + dx, sy + dy)
+  else
+    self:scrollMap(0, 0)
+  end
+
+  self.last_render_w = scr_w
+  self.last_render_h = scr_h
 
   UI.onChangeResolution(self)
 end
@@ -779,6 +796,7 @@ end
 --!return (boolean) event processed indicator
 function GameUI:onPinchBegin()
   self.current_momentum.z = 0
+  return true
 end
 
 --! Process SDL_EVENT_PINCH_UPDATE.
@@ -787,7 +805,11 @@ end
 --!param scale (number) The scale change since the last SDL_EVENT_PINCH_UPDATE.
 --!                     Scale < 1 is "zoom out". Scale > 1 is "zoom in"
 function GameUI:onPinchUpdate(scale)
-  self.current_momentum.z = self.current_momentum.z + (scale - 1) * pinch_zoom_sensitivity
+  local delta = (scale - 1) * 20
+  if math.abs(delta) > 0.001 then
+    self.app.world:adjustZoom(delta)
+  end
+  self.current_momentum.z = delta
   return true
 end
 
@@ -795,6 +817,7 @@ end
 --!
 --!return (boolean) event processed indicator
 function GameUI:onPinchEnd()
+  return true
 end
 
 function GameUI:onWindowDisplayScaleChanged(scale)
@@ -818,20 +841,25 @@ function GameUI:onMouseWheel(x, y, touch, flipped)
   local inside_window = false
   if self.windows then
     for _, window in ipairs(self.windows) do
-      local wx, wy = window:getRealXY()
-      if window:hitTest(self.cursor_x - wx, self.cursor_y - wy) then
-        inside_window = true
-        break
+      if window ~= self.bottom_panel then
+        local wx, wy = window:getRealXY()
+        if window:hitTest(self.cursor_x - wx, self.cursor_y - wy) then
+          inside_window = true
+          break
+        end
       end
     end
   end
   if not inside_window then
-    -- Consider making touch scrolling pan instead of zoom, you can pinch to zoom
-    -- on a touch pad.
-
-    -- Apply momentum to the zoom
-    if math.abs(self.current_momentum.z) < 12 then
-      self.current_momentum.z = self.current_momentum.z + y
+    if touch then
+      local zoom = self:getEffectiveZoom()
+      self:scrollMap(-x / zoom, -y / zoom)
+      return true
+    else
+      -- Apply momentum to the zoom
+      if math.abs(self.current_momentum.z) < 12 then
+        self.current_momentum.z = self.current_momentum.z + y
+      end
     end
   end
   return UI.onMouseWheel(self, x, y)

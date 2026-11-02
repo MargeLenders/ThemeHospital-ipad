@@ -1421,7 +1421,7 @@ function App:onSoundOver(...)
 end
 
 function App:onPinchBegin(...)
-  return self.ui:onPinchUpdate(...)
+  return self.ui:onPinchBegin(...)
 end
 
 function App:onPinchUpdate(...)
