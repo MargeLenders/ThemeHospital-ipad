@@ -55,6 +55,7 @@ function UIBottomPanel:UIBottomPanel(ui)
   self.countdown = 0
 
   self:drawPanels()
+  self:setDefaultPosition(0.5, -0.1)
 
   self:registerKeyHandlers()
 end
@@ -70,9 +71,9 @@ function UIBottomPanel:machineMenuButtonExists()
 end
 
 function UIBottomPanel:onChangeResolution()
-  Window.onChangeResolution(self)
   self:removeAllPanels()
   self:drawPanels()
+  Window.onChangeResolution(self)
 end
 
 function UIBottomPanel:drawPanels()
@@ -86,35 +87,59 @@ function UIBottomPanel:drawPanels()
   -- The dynamic info bar
   self:addPanel(12, 364, 0)
 
-  -- If there is a machine menu button, then lets adjust bottom panel width so it can fit
-  if self:machineMenuButtonExists() then
-    self.width = 676
-    for x = 377, 660, 10 do
-      self:addPanel(13, x, 0)
-    end
-    self:addPanel(14, 665, 0)
+  local scr_w, scr_h = TheApp.video:getRenderSize()
+  local s = TheApp.gfx:getUIScale()
+  local available_w = math.floor(scr_w / s)
+  local is_portrait = scr_h > scr_w
 
-    self.offset = 38
-  else
-    self.width = 640
-    for x = 377, 630, 10 do
-      self:addPanel(13, x, 0)
-    end
-    self:addPanel(14, 627, 0)
-
-    self.offset = 0
+  local base_w = self:machineMenuButtonExists() and 676 or 640
+  local panel_w = base_w
+  if is_portrait then
+    panel_w = available_w
   end
+
+  self.width = panel_w
+  self.offset = self:machineMenuButtonExists() and 38 or 0
+
+  local ticker_end = panel_w - 13
+  for x = 377, ticker_end, 10 do
+    self:addPanel(13, x, 0)
+  end
+  self:addPanel(14, ticker_end, 0)
 
   -- Buttons that are shown instead of the dynamic info bar when hovering over it.
   local panels = {}
   local buttons = {}
   local app = self.ui.app
-  panels[1]  = self:addPanel(15, 364, 0) -- Staff management button
+  local is_ultra_compact = panel_w < 550
+  local button_y = 0
+  local start_x = 364
+  local has_machine_btn = self:machineMenuButtonExists()
+  local num_buttons = has_machine_btn and 8 or 7
+  local is_compact = panel_w < base_w
+  local spacing = 38
+  if is_ultra_compact then
+    button_y = -42
+    start_x = math.max(10, math.floor((panel_w - num_buttons * 38) / 2))
+    spacing = 38
+  elseif is_compact and panel_w > start_x + 38 then
+    spacing = math.max(26, math.min(38, (panel_w - 38 - start_x) / (num_buttons - 1)))
+  end
+
+  local function get_button_x(idx, default_x)
+    if is_ultra_compact or is_compact then
+      return math.floor(start_x + (idx - 1) * spacing)
+    end
+    return default_x
+  end
+
+  panels[1]  = self:addPanel(15, get_button_x(1, 364), button_y) -- Staff management button
   buttons[1] = panels[1]:makeToggleButton(6, 6, 35, 36, 16, self.dialogStaffManagement):setTooltip(_S.tooltip.toolbar.staff_list)
-  if self:machineMenuButtonExists() then
+  local current_idx = 2
+  if has_machine_btn then
     -- Sprites for machine menu button doesn't exist in original game. Let's import them from aux_ui.dat and draw
     local aux_sprites = app.gfx:loadSpriteTable("Bitmap", "aux_ui", true)
-    self:addPanel(0, 407, 0):makeToggleButton(2, 6, 36, 36, 0, self.dialogMachineMenu)
+    self:addPanel(0, get_button_x(current_idx, 407), button_y):makeToggleButton(2, 6, 36, 36, 0, self.dialogMachineMenu)
       :setSound() -- override
       :setTooltip(_S.tooltip.toolbar.machine_menu)
       .panel_for_sprite.custom_draw = --[[persistable:machine_menu_buttons]] function(panel, canvas, x, y)
@@ -132,19 +157,25 @@ function UIBottomPanel:drawPanels()
         end
       end
     end
+    current_idx = current_idx + 1
   end
-  panels[2]  = self:addPanel(17, 407 + self.offset, 0) -- Town map button
+  panels[2]  = self:addPanel(17, get_button_x(current_idx, 407 + self.offset), button_y) -- Town map button
   buttons[2] = panels[2]:makeToggleButton(1, 6, 35, 36, 18, self.dialogTownMap):setTooltip(_S.tooltip.toolbar.town_map)
-  panels[3]  = self:addPanel(19, 445 + self.offset, 0) -- Casebook button
+  current_idx = current_idx + 1
+  panels[3]  = self:addPanel(19, get_button_x(current_idx, 445 + self.offset), button_y) -- Casebook button
   buttons[3] = panels[3]:makeToggleButton(1, 6, 35, 36, 20, self.dialogDrugCasebook):setTooltip(_S.tooltip.toolbar.casebook)
-  panels[4]  = self:addPanel(21, 483 + self.offset, 0) -- Research button
+  current_idx = current_idx + 1
+  panels[4]  = self:addPanel(21, get_button_x(current_idx, 483 + self.offset), button_y) -- Research button
   buttons[4] = panels[4]:makeToggleButton(1, 6, 35, 36, 22, self.dialogResearch)
     :setSound():setTooltip(_S.tooltip.toolbar.research) -- Remove default sound for this button
-  panels[5]  = self:addPanel(23, 521 + self.offset, 0) -- Status button
+  current_idx = current_idx + 1
+  panels[5]  = self:addPanel(23, get_button_x(current_idx, 521 + self.offset), button_y) -- Status button
   buttons[5] = panels[5]:makeToggleButton(1, 6, 35, 36, 24, self.dialogStatus):setTooltip(_S.tooltip.toolbar.status)
-  panels[6]  = self:addPanel(25, 559 + self.offset, 0) -- Charts button
+  current_idx = current_idx + 1
+  panels[6]  = self:addPanel(25, get_button_x(current_idx, 559 + self.offset), button_y) -- Charts button
   buttons[6] = panels[6]:makeToggleButton(1, 6, 35, 36, 26, self.dialogCharts):setTooltip(_S.tooltip.toolbar.charts)
-  panels[7]  = self:addPanel(27, 597 + self.offset, 0) -- Policy button
+  current_idx = current_idx + 1
+  panels[7]  = self:addPanel(27, get_button_x(current_idx, 597 + self.offset), button_y) -- Policy button
   buttons[7] = panels[7]:makeToggleButton(1, 6, 35, 36, 28, self.dialogPolicy):setTooltip(_S.tooltip.toolbar.policy)
   for _, panel in ipairs(panels) do
     panel.visible = false
@@ -246,10 +277,21 @@ function UIBottomPanel:quit()
 end
 
 function UIBottomPanel:draw(canvas, x, y)
+  local s = TheApp.gfx:getUIScale()
+  if self.width < 550 and self.additional_panels and self.additional_panels[1] and self.additional_panels[1].visible then
+    local bg_x = x + self.x * s + math.max(6, math.floor((self.width - #self.additional_panels * 38) / 2) - 4) * s
+    local bg_y = y + self.y * s - 44 * s
+    local bg_w = (#self.additional_panels * 38 + 8) * s
+    local bg_h = 42 * s
+    local dark_bar = canvas:mapRGB(36, 42, 58)
+    local border_bar = canvas:mapRGB(80, 90, 110)
+    canvas:drawRect(border_bar, bg_x - s, bg_y - s, bg_w + 2 * s, bg_h + 2 * s)
+    canvas:drawRect(dark_bar, bg_x, bg_y, bg_w, bg_h)
+  end
+
   Window.draw(self, canvas, x, y)
 
   -- Draw balance with temporary offset in unicode languages
-  local s = TheApp.gfx:getUIScale()
   x, y = x + self.x * s, y + self.y * s
   local offset_x, offset_y = 0, 0
   if self.ui.app.gfx:drawNumbersFromUnicode() then
@@ -308,14 +350,32 @@ end
 --!param y (num) coordinate
 function UIBottomPanel:drawDynamicInfo(canvas, x, y)
   local s = TheApp.gfx:getUIScale()
+  local dynamic_info_panel_x = 364
+  local is_compact = self.width < 550
+  local text_w = math.max(160, self.width - dynamic_info_panel_x - 30)
+  local text_x = x + 10 * s
+  local text_y = y + 14 * s
+
+  if is_compact then
+    text_x = self.x * s + 10 * s
+    text_w = self.width - 20
+    text_y = y - 28 * s
+  end
+
   if self.world:isCurrentSpeed("Pause") then
     if not self.world.user_actions_allowed then
-      -- Original pause behaviour, show pause text
-      self.pause_font:drawWrapped(canvas, _S.misc.pause, x + 10 * s, y + 14 * s, 255 * s, "center")
+      if is_compact then
+        local bg = canvas:mapRGB(0, 0, 0, 160)
+        canvas:drawRect(bg, text_x - 4 * s, text_y - 2 * s, (text_w + 8) * s, 22 * s)
+      end
+      self.pause_font:drawWrapped(canvas, _S.misc.pause, text_x, text_y, text_w * s, "center")
       return
     elseif not (self.dynamic_info and self.dynamic_info["text"]) then
-      -- User allows editing while paused, only show pause text where dynamic text not present
-      self.pause_font:drawWrapped(canvas, _S.misc.pause, x + 10 * s, y + 14 * s, 255 * s, "center")
+      if is_compact then
+        local bg = canvas:mapRGB(0, 0, 0, 160)
+        canvas:drawRect(bg, text_x - 4 * s, text_y - 2 * s, (text_w + 8) * s, 22 * s)
+      end
+      self.pause_font:drawWrapped(canvas, _S.misc.pause, text_x, text_y, text_w * s, "center")
       return
     end
   end
@@ -327,24 +387,29 @@ function UIBottomPanel:drawDynamicInfo(canvas, x, y)
   local info = self.dynamic_info
   local font = self.white_font
 
-  local dynamic_info_panel_x = 364
   local progress_bar_r_offset = 11
   local progress_bar_width = 100
 
-  local w = x + (self.width - dynamic_info_panel_x) * s
+  local w = is_compact and (text_x + text_w * s) or (x + (self.width - dynamic_info_panel_x) * s)
+
+  if is_compact then
+    local bg = canvas:mapRGB(0, 0, 0, 160)
+    canvas:drawRect(bg, text_x - 4 * s, text_y - 2 * s, (text_w + 8) * s, (14 * #info["text"] + 8) * s)
+  end
 
   for i, text in ipairs(info["text"]) do
-    font:drawWrapped(canvas, text, x + 20 * s, y + 10 * i * s, 240 * s)
+    local cur_y = is_compact and (text_y + (i - 1) * 12 * s) or (y + 10 * i * s)
+    font:drawWrapped(canvas, text, is_compact and text_x or (x + 20 * s), cur_y, text_w * s)
     if i == #info["text"] and info["progress"] then
       local white = canvas:mapRGB(255, 255, 255)
       local black = canvas:mapRGB(0, 0, 0)
       local orange = canvas:mapRGB(221, 83, 0)
-      canvas:drawRect(white, w - (progress_bar_width + progress_bar_r_offset + 1) * s, y + 10 * i * s, 100 * s, 10 * s)
-      canvas:drawRect(black, w - (progress_bar_width + progress_bar_r_offset) * s, y + s + 10 * i * s, 98 * s, 8 * s)
-      canvas:drawRect(orange, w - (progress_bar_width + progress_bar_r_offset) * s, y + s + 10 * i * s, math.floor(98 * info["progress"] * s), 8 * s)
+      canvas:drawRect(white, w - (progress_bar_width + progress_bar_r_offset + 1) * s, cur_y, 100 * s, 10 * s)
+      canvas:drawRect(black, w - (progress_bar_width + progress_bar_r_offset) * s, cur_y + s, 98 * s, 8 * s)
+      canvas:drawRect(orange, w - (progress_bar_width + progress_bar_r_offset) * s, cur_y + s, math.floor(98 * info["progress"] * s), 8 * s)
       if info["dividers"] then
         for _, value in ipairs(info["dividers"]) do
-          canvas:drawRect(white, w - (progress_bar_width+progress_bar_r_offset) * s + math.floor(value * 100 * s), y + 10 * i * s, s, 10 * s)
+          canvas:drawRect(white, w - (progress_bar_width+progress_bar_r_offset) * s + math.floor(value * 100 * s), cur_y, s, 10 * s)
         end
       end
     end
@@ -396,6 +461,29 @@ end
 
 function UIBottomPanel:showAdditionalButtons(x, y)
   local panels = self.additional_panels
+  local s = TheApp.gfx:getUIScale()
+  local is_compact = self.width < 550
+
+  if is_compact then
+    -- On compact phone screens, show when hovering/tapping the right-side menu trigger or the upper row
+    local in_trigger = (x >= 350 * s and x < self.width * s and y >= 0 and y < self.height * s)
+    local in_row2 = (panels[1].visible and y >= -44 * s and y <= 0 and x >= 0 and x < self.width * s)
+    if in_trigger or in_row2 then
+      if not panels[1].visible then
+        for _, panel in ipairs(panels) do
+          panel.visible = true
+        end
+      end
+    else
+      if panels[1].visible then
+        for _, panel in ipairs(panels) do
+          panel.visible = false
+        end
+      end
+    end
+    return
+  end
+
   if self:hitTest(x, y) then -- Inside the panel
     if not panels[1].visible then -- Are the buttons already shown?
       for _, panel in ipairs(panels) do
@@ -413,7 +501,11 @@ end
 
 function UIBottomPanel:hitTest(x, y, x_offset)
   local s = TheApp.gfx:getUIScale()
-  return x >= (x_offset and x_offset * s or 0) and y >= 0 and x < self.width * s and y < self.height * s
+  local min_y = 0
+  if self.additional_panels and self.additional_panels[1] and self.additional_panels[1].visible and self.width < 550 then
+    min_y = -44 * s
+  end
+  return x >= (x_offset and x_offset * s or 0) and y >= min_y and x < self.width * s and y < self.height * s
 end
 
 --! Queue a fax notification message to appear.

@@ -1111,7 +1111,26 @@ function Graphics:getUIScale()
     return self.actual_ui_scale
   end
   local scr_w, scr_h = self.target:getRenderSize()
-  local max_scale = math.floor(math.min(scr_w / App.MIN_WINDOW_WIDTH, scr_h / App.MIN_WINDOW_HEIGHT));
+  local is_portrait = scr_h > scr_w
+  local min_w = App.MIN_WINDOW_WIDTH
+  local min_h = App.MIN_WINDOW_HEIGHT
+
+  -- In portrait orientation, vertical space is abundant while width is the primary constraint.
+  -- On phones (e.g. 1170-1320px physical width, Retina 3x), min_w = 390 allows 3x UI scaling,
+  -- providing comfortable touch targets and legible text matching native 3x iOS point density.
+  -- On tablets (e.g. iPad in portrait: >= 1536px width), min_w = 580 keeps the optimal 2x scale.
+  if is_portrait then
+    if self.display_scale >= 3 or scr_w <= 1300 then
+      min_w = 390
+      min_h = 390
+    else
+      min_w = 580
+      min_h = 580
+    end
+  end
+
+  local max_scale = math.floor(math.min(scr_w / min_w, scr_h / min_h))
+  max_scale = math.max(1, max_scale)
   local cs = TheApp.config.ui_scale * self.display_scale
   if cs == 0 or cs > max_scale then
     self.actual_ui_scale = max_scale
