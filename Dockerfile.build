@@ -1,0 +1,25 @@
+# Dockerfile to build CorsixTH
+FROM ubuntu:latest
+
+WORKDIR /sourcecode
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get -y update 
+
+RUN apt-get install -y \
+    # Base Tools
+    build-essential cmake git doxygen \
+    # LUA
+    liblua5.5-0 liblua5.5-0-dbg liblua5.5-dev \
+    lua-filesystem lua-lpeg \
+    # SDL3
+    libsdl3-dev libsdl3-mixer-dev \
+    # AV
+    ffmpeg timidity \
+    libavformat-dev libavresample-dev libavdevice-dev libavutil-dev libavfilter-dev libavcodec-dev \
+    libpostproc-dev libswscale-dev libswresample-dev \
+    # Font
+    libfreetype6-dev
+
+CMD mkdir -p build && cd build && cmake -DUSE_SOURCE_DATADIRS=ON .. && make

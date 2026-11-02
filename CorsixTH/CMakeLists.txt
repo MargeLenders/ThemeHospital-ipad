@@ -1,0 +1,504 @@
+# Sanity check
+if(CORSIX_TH_DONE_TOP_LEVEL_CMAKE)
+else()
+  message(FATAL_ERROR "Please run CMake from the top-level directory instead of here.")
+endif()
+
+# Project Declaration
+project(CorsixTH)
+
+if(WITH_FONT AND FETCH_UNICODE_FONT)
+  message(WARNING "CorsixTH will attempt to use the WITH_FONT value ${WITH_FONT} before the fetched Unicode font.")
+endif()
+
+if(MSVC)
+  # We want to bind against the very latest versions of the MSVC runtimes
+  add_definitions(/D "_BIND_TO_CURRENT_VCLIBS_VERSION=1")
+  # Suppress warnings about insecure functions
+  add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+endif()
+
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+#include <atomic>
+int main() {
+  std::atomic<double> d {0.0};
+  return static_cast<int>(d.load());
+}
+" ATOMIC_BUILTIN)
+
+set(CORSIX_TH_SEARCH_LOCAL_DATADIRS ${SEARCH_LOCAL_DATADIRS})
+
+set(CORSIX_TH_INTERPRETER_NAME CorsixTH.lua)
+if(USE_SOURCE_DATADIRS)
+  set(CORSIX_TH_DATADIR ${CMAKE_CURRENT_SOURCE_DIR})
+  set(CORSIX_TH_INTERPRETER_PATH ${CORSIX_TH_DATADIR}/${CORSIX_TH_INTERPRETER_NAME})
+elseif(MSVC)
+  set(CORSIX_TH_DATADIR CorsixTH)
+  set(CORSIX_TH_INTERPRETER_PATH ${CORSIX_TH_INTERPRETER_NAME})
+elseif(APPLE)
+  set(CORSIX_TH_DATADIR CorsixTH.app/Contents/Resources/)
+  set(CORSIX_TH_INTERPRETER_PATH ${CMAKE_INSTALL_PREFIX}/${CORSIX_TH_DATADIR}/${CORSIX_TH_INTERPRETER_NAME})
+else()
+  set(CORSIX_TH_DATADIR ${CMAKE_INSTALL_DATADIR}/corsix-th)
+  set(CORSIX_TH_INTERPRETER_PATH ${CMAKE_INSTALL_FULL_DATADIR}/corsix-th/${CORSIX_TH_INTERPRETER_NAME})
+endif()
+
+if(FETCH_UNICODE_FONT OR FETCH_SDL_MIXER OR FETCH_SOUNDFONT)
+  include(FetchContent)
+endif()
+
+# Declaration of the executable
+if(APPLE)
+  set(corsixth_icon_file ${CMAKE_SOURCE_DIR}/CorsixTH/Icon.icns)
+  set_source_files_properties(${corsixth_icon_file} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  set(MACOSX_BUNDLE_ICON_FILE Icon.icns)
+
+  add_executable(CorsixTH MACOSX_BUNDLE ${corsixth_icon_file})
+
+  set_target_properties(CorsixTH PROPERTIES LINK_FLAGS_MINSIZEREL "-dead_strip")
+  set_target_properties(CorsixTH PROPERTIES XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@executable_path/../Frameworks")
+elseif(MSVC)
+  add_executable(CorsixTH CorsixTH.rc)
+else()
+  add_executable(CorsixTH "")
+endif()
+
+# Report operating system in compile_opts.os
+if(WIN32)
+  set(CORSIX_TH_OS "windows")
+elseif(APPLE)
+  set(CORSIX_TH_OS "macos")
+else()
+  set(CORSIX_TH_OS "unix")
+endif()
+
+# Report system architecture in compile_opts.arch
+if(MSVC)
+  set(CORSIX_TH_ARCH ${CMAKE_CXX_COMPILER_ARCHITECTURE_ID})
+else()
+  set(CORSIX_TH_ARCH ${CMAKE_SYSTEM_PROCESSOR})
+endif()
+
+# Set default value of font file in compile_opts.font
+if(WITH_FONT)
+  set(CORSIX_TH_FONT ${WITH_FONT})
+endif()
+
+# Ensure config.h is picked up by cmake - moving this into subdir cmake files will
+# prevent it applying to the CorsixTH project
+set(CorsixTH_generated_src_dir ${CMAKE_BINARY_DIR}/CorsixTH/Src/)
+add_library(CorsixTH_lib STATIC ${CorsixTH_generated_src_dir})
+
+target_include_directories(CorsixTH_lib PUBLIC ${CorsixTH_generated_src_dir})
+
+target_link_libraries(CorsixTH_lib PRIVATE RncLib)
+if(SEARCH_LOCAL_DATADIRS)
+  target_link_libraries(CorsixTH_lib PRIVATE WhereamiLib)
+endif()
+target_link_libraries(CorsixTH PRIVATE CorsixTH_lib)
+
+if(UNIX AND NOT APPLE)
+  set_target_properties(CorsixTH PROPERTIES OUTPUT_NAME corsix-th)
+endif()
+
+if(NOT ATOMIC_BUILTIN)
+  target_link_libraries(CorsixTH_lib PRIVATE atomic)
+endif()
+
+# Generate source files list
+# Note: Done after generating targets
+add_subdirectory(${PROJECT_SOURCE_DIR}/Src)
+add_subdirectory(${PROJECT_SOURCE_DIR}/SrcUnshared)
+
+# Set language standard
+set_property(TARGET CorsixTH_lib PROPERTY CXX_STANDARD 17)
+set_property(TARGET CorsixTH_lib PROPERTY CXX_EXTENSIONS OFF)
+set_property(TARGET CorsixTH_lib PROPERTY CXX_STANDARD_REQUIRED ON)
+
+set_property(TARGET CorsixTH PROPERTY CXX_STANDARD 17)
+set_property(TARGET CorsixTH PROPERTY CXX_EXTENSIONS OFF)
+set_property(TARGET CorsixTH PROPERTY CXX_STANDARD_REQUIRED ON)
+
+## Finding libraries
+if(NOT VCPKG_TARGET_TRIPLET)
+  find_package(PkgConfig QUIET)
+endif()
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(CorsixTH_lib PRIVATE ZLIB::ZLIB)
+
+# Find SDL
+find_package(SDL3 CONFIG REQUIRED COMPONENTS SDL3)
+target_link_libraries(CorsixTH_lib PUBLIC SDL3::SDL3)
+
+# Find Lua
+if(VCPKG_TARGET_TRIPLET)
+  find_package(Lua REQUIRED)
+  target_include_directories(CorsixTH_lib PUBLIC ${LUA_INCLUDE_DIRS})
+  target_link_libraries(CorsixTH_lib PUBLIC ${LUA_LIBRARIES})
+else()
+  find_package(Lua REQUIRED)
+  if(Lua_FOUND OR LUA_FOUND)
+    target_link_libraries(CorsixTH_lib PUBLIC ${LUA_LIBRARY})
+    include_directories(${LUA_INCLUDE_DIR})
+    # Special link flags needed on macOS 64bit, according to: http://luajit.org/install.html
+    # If these are not specified, luaL_newstate() returns NULL and we get this:
+    #   Fatal error starting CorsixTH: Cannot open Lua state.
+    if(APPLE AND LUA_LIBRARIES MATCHES "libluajit" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+      target_link_libraries(CorsixTH "-pagezero_size 10000" "-image_base 100000000")
+    endif()
+    if(LUA_LIBRARIES MATCHES "libluajit")
+      message("  LuaJIT${LUA_VERSION_MAJOR}.${LUA_VERSION_MINOR} found")
+    else()
+      message("  Lua${LUA_VERSION_MAJOR}.${LUA_VERSION_MINOR} found")
+      if(WITH_LUAJIT)
+        message("    Did you want to use LuaJIT? Please specify the path")
+      endif()
+      unset(WITH_LUAJIT CACHE)
+    endif()
+  else()
+    message(FATAL_ERROR "Error: Lua library not found, it is required to build")
+  endif()
+endif()
+
+# Add threading library
+find_package(Threads)
+target_link_libraries(CorsixTH PRIVATE ${CMAKE_THREAD_LIBS_INIT})
+
+# Find SDL_mixer
+if(FETCH_SDL_MIXER)
+  FetchContent_Declare(SDL3_mixer GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git GIT_TAG release-3.2.4)
+
+  FetchContent_MakeAvailable(SDL3_mixer)
+else()
+  find_package(SDL3_mixer CONFIG REQUIRED)
+endif()
+target_link_libraries(
+  CorsixTH_lib
+  PUBLIC $<IF:$<TARGET_EXISTS:SDL3_mixer::SDL3_mixer>,SDL3_mixer::SDL3_mixer,SDL3_mixer::SDL3_mixer-static>
+)
+
+# Find FluidSynth
+# FluidSynth upstream provides a CMake config but not all distros seem to carry it.
+find_package(FluidSynth CONFIG)
+if(NOT FluidSynth_FOUND AND PkgConfig_FOUND)
+  pkg_search_module(FLUIDSYNTH REQUIRED fluidsynth)
+  if(FLUIDSYNTH_FOUND)
+    add_library(FluidSynth::libfluidsynth INTERFACE IMPORTED)
+    set_target_properties(
+            FluidSynth::libfluidsynth
+            PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${FLUIDSYNTH_INCLUDE_DIRS}" INTERFACE_LINK_LIBRARIES "${FLUIDSYNTH_LIBRARIES}"
+    )
+    set(FluidSynth_FOUND TRUE)
+  endif()
+endif()
+if(FluidSynth_FOUND)
+  message("  FluidSynth found")
+  target_link_libraries(CorsixTH_lib PRIVATE FluidSynth::libfluidsynth)
+else()
+  message(FATAL_ERROR "Error: FluidSynth was not found.")
+endif()
+
+# Find FFMPEG
+if(CORSIX_TH_USE_FFMPEG)
+  find_package(
+    FFMPEG
+    COMPONENTS AVFORMAT AVCODEC SWSCALE SWRESAMPLE AVUTIL
+    QUIET
+  )
+  if(FFMPEG_FOUND)
+    target_link_libraries(CorsixTH_lib PUBLIC ${FFMPEG_LIBRARIES})
+    include_directories(${FFMPEG_INCLUDE_DIRS})
+  else()
+    pkg_check_modules(
+      FFmpeg
+      REQUIRED
+      IMPORTED_TARGET
+      libavformat
+      libavcodec
+      libswresample
+      libswscale
+      libavutil
+    )
+    if(pkgcfg_lib_FFmpeg_avcodec)
+      target_link_libraries(CorsixTH_lib PUBLIC PkgConfig::FFmpeg)
+      include_directories(PkgConfig::FFmpeg)
+      set(FFMPEG_FOUND TRUE)
+    endif()
+  endif()
+
+  if(FFMPEG_FOUND)
+    if(APPLE)
+      # These frameworks are necessary for a full static build of ffmpeg.
+      # But they are weakly linked in case a dynamic or minimal build of ffmpeg is used
+      target_link_libraries(CorsixTH_lib PRIVATE iconv "-weak_framework CoreVideo")
+      # These frameworks were added: CoreVideo in 10.4, CoreMedia in 10.7, VideoToolbox in 10.8
+      if(CMAKE_OSX_DEPLOYMENT_TARGET VERSION_GREATER_EQUAL "10.8" OR NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        target_link_libraries(CorsixTH_lib PRIVATE "-weak_framework CoreMedia" "-weak_framework VideoToolbox")
+      endif()
+    endif(APPLE)
+    message("  FFmpeg found")
+  else()
+    message(FATAL_ERROR "Error: FFmpeg library not found, even though it was selected to be included")
+  endif()
+endif()
+
+# Find Freetype2
+if(VCPKG_TARGET_TRIPLET)
+  find_package(Freetype REQUIRED)
+  target_link_libraries(CorsixTH_lib PUBLIC Freetype::Freetype)
+else()
+  find_package(Freetype REQUIRED)
+  if(FREETYPE_FOUND)
+    target_link_libraries(CorsixTH_lib PUBLIC ${FREETYPE_LIBRARIES})
+    include_directories(${FREETYPE_INCLUDE_DIRS})
+    message("  FreeType2 found")
+  else()
+    message(FATAL_ERROR "Error: FreeType2 library not found, it is required to build")
+  endif()
+endif()
+
+if(WITH_UPDATE_CHECK)
+  find_package(CURL REQUIRED COMPONENTS HTTPS SSL)
+  if(CURL_FOUND)
+    target_link_libraries(CorsixTH_lib PRIVATE CURL::libcurl)
+    message("  Curl found")
+  else()
+    message(FATAL_ERROR "Error: curl not found")
+  endif()
+endif()
+
+if(CORSIX_TH_LINK_LUA_MODULES)
+  message("Linking lua modules")
+  find_package(unofficial-luafilesystem CONFIG REQUIRED)
+  target_link_libraries(CorsixTH_lib PRIVATE unofficial::luafilesystem::lfs)
+
+  find_package(unofficial-lpeg CONFIG REQUIRED)
+  target_link_libraries(CorsixTH_lib PRIVATE unofficial::lpeg::lpeg)
+
+  add_custom_command(
+    TARGET CorsixTH
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy ${UNOFFICIAL_LPEG_LUA_FILES} $<TARGET_FILE_DIR:CorsixTH>
+  )
+
+  if(NOT USE_SOURCE_DATADIRS)
+    install(FILES ${UNOFFICIAL_LPEG_LUA_FILES} DESTINATION ${CORSIX_TH_DATADIR})
+  endif()
+else()
+  message("Lua modules are not linked and will be loaded at runtime")
+endif()
+
+# Find libpng
+find_package(PNG REQUIRED)
+target_link_libraries(CorsixTH_lib PRIVATE PNG::PNG)
+
+if(WITH_MIDI_DEVICE)
+  find_package(RtMidi)
+  if(NOT RtMidi_FOUND AND PkgConfig_FOUND)
+    pkg_search_module(RTMIDI REQUIRED rtmidi)
+    if(RTMIDI_FOUND)
+      add_library(RtMidi::rtmidi INTERFACE IMPORTED)
+      set_target_properties(
+        RtMidi::rtmidi
+        PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${RTMIDI_INCLUDE_DIRS}" INTERFACE_LINK_LIBRARIES "${RTMIDI_LIBRARIES}"
+      )
+      set(RtMidi_FOUND TRUE)
+    endif()
+  endif()
+  if(RtMidi_FOUND)
+    message("  RtMidi found")
+    target_link_libraries(CorsixTH_lib PRIVATE RtMidi::rtmidi)
+  else()
+    message(FATAL_ERROR "Error: RtMidi was not found. If not available, compile WITH_MIDI_DEVICE=OFF")
+  endif()
+endif()
+
+if(FETCH_SOUNDFONT)
+  set(SOUNDFONT_FILE "${CMAKE_BINARY_DIR}/GeneralUser-GS.sf2")
+  file(DOWNLOAD
+    https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/684543d5e5efaef08d02be50dcda8d552478fa60/GeneralUser-GS.sf2
+    "${SOUNDFONT_FILE}"
+    EXPECTED_HASH SHA256=9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe
+    STATUS SOUNDFONT_STATUS
+  )
+
+  list(GET SOUNDFONT_STATUS 0 SOUNDFONT_STATUS_CODE)
+  if(NOT SOUNDFONT_STATUS_CODE EQUAL 0)
+    message(FATAL_ERROR "Failed to download soundfont: ${SOUNDFONT_STATUS}")
+  else()
+    message("  Soundfont found")
+  endif()
+endif()
+
+if(FETCH_UNICODE_FONT)
+  set(GONOTO_FILE "${CMAKE_BINARY_DIR}/CorsixTHUnicode.ttf")
+  file(DOWNLOAD
+    https://github.com/satbyy/go-noto-universal/releases/download/v7.0/GoNotoKurrent-Regular.ttf
+    "${GONOTO_FILE}"
+    EXPECTED_HASH SHA256=2f2cee5fbb2403df352ca2005247f6c4faa70f3086ebd31b6c62308b5f2f9865
+    STATUS GONOTO_STATUS
+  )
+
+  list(GET GONOTO_STATUS 0 GONOTO_STATUS_CODE)
+  if(NOT GONOTO_STATUS_CODE EQUAL 0)
+    message(FATAL_ERROR "Failed to download unicode font: ${GONOTO_STATUS}")
+  else()
+    message("  Unicode font found")
+  endif()
+endif()
+
+if(WITH_TRACY)
+  # If tracy is compiled on a machine with rocprofiler installed it
+  # automatically adds it as a dependency. Using an optional find_package
+  # before finding Tracy allows that dependency to resolve.
+  find_package(rocprofiler-sdk QUIET)
+
+  find_package(Tracy CONFIG REQUIRED)
+  target_link_libraries(CorsixTH_lib PUBLIC Tracy::TracyClient)
+endif()
+
+find_package(zstd CONFIG REQUIRED)
+if(TARGET zstd::libzstd)
+    set(CORSIXTH_ZSTD_TARGET zstd::libzstd)
+elseif(TARGET zstd::libzstd_shared)
+    set(CORSIXTH_ZSTD_TARGET zstd::libzstd_shared)
+elseif(TARGET zstd::libzstd_static)
+    set(CORSIXTH_ZSTD_TARGET zstd::libzstd_static)
+else()
+    message(FATAL_ERROR
+        "zstd was found, but no supported CMake target was exported")
+endif()
+target_link_libraries(CorsixTH_lib PRIVATE "${CORSIXTH_ZSTD_TARGET}")
+
+# Launch script to facilitate out of source builds
+if(USE_SOURCE_DATADIRS)
+  # Do not generate launch script. The default is fine for this case.
+elseif(XCODE)
+  message(
+    WARNING
+    "By default you will not be able to run CorsixTH from Xcode. If you do not plan to deploy then run cmake with -DUSE_SOURCE_DATADIRS. If you want to both run and deploy from Xcode then set the command line arguments in your run scheme to --interpreter=${CMAKE_CURRENT_SOURCE_DIR}/CorsixTH.lua"
+  )
+elseif(APPLE)
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/run-corsix-th-dev.sh.in.apple
+    ${CMAKE_CURRENT_BINARY_DIR}/run-corsixth-dev.sh
+    @ONLY
+  )
+elseif(UNIX)
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/run-corsix-th-dev.sh.in
+    ${CMAKE_CURRENT_BINARY_DIR}/run-corsixth-dev.sh
+    @ONLY
+  )
+elseif(MSVC)
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/CorsixTH.vcxproj.user.in
+    ${CMAKE_CURRENT_BINARY_DIR}/CorsixTH.vcxproj.user
+    @ONLY
+  )
+endif()
+
+# Adding testing files whilst we also have the list of source files and have found libs
+if(ENABLE_UNIT_TESTS)
+  message("Building Unit Tests")
+  # Enable testing if set at this level so we can use CTest from the root of the build dir
+  add_subdirectory(${PROJECT_SOURCE_DIR}/CppTest)
+endif()
+
+# Declaration of the install process
+if(NOT USE_SOURCE_DATADIRS)
+  if(APPLE)
+    # Just use the prefix as it's sufficient to just set the prefix to /Applications on Mac.
+    install(TARGETS CorsixTH BUNDLE DESTINATION .)
+  elseif(MSVC)
+    install(
+      TARGETS CorsixTH
+      RUNTIME DESTINATION ${CORSIX_TH_DATADIR}
+      LIBRARY DESTINATION ${CORSIX_TH_DATADIR}
+      ARCHIVE DESTINATION ${CORSIX_TH_DATADIR}
+    )
+    install(FILES CorsixTH.ico DESTINATION ${CORSIX_TH_DATADIR})
+
+    # Install dependencies
+    if(CMAKE_CONFIGURATION_TYPES)
+      install(
+        DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/"
+        DESTINATION ${CORSIX_TH_DATADIR}
+        FILES_MATCHING
+        PATTERN "*.dll"
+        PATTERN "*.lua"
+      )
+    else()
+      install(
+        DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/"
+        DESTINATION ${CORSIX_TH_DATADIR}
+        FILES_MATCHING
+        PATTERN "*.dll"
+        PATTERN "*.lua"
+      )
+    endif()
+
+    # Include this module to search for compiler-provided system runtime
+    # libraries and add install rules for them.
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ${CORSIX_TH_DATADIR})
+    include(InstallRequiredSystemLibraries)
+  else()
+    install(
+      TARGETS CorsixTH
+      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+      LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+  endif()
+  install(DIRECTORY Campaigns Lua Levels DESTINATION ${CORSIX_TH_DATADIR})
+  install(DIRECTORY Bitmap DESTINATION ${CORSIX_TH_DATADIR} FILES_MATCHING REGEX ".*\\.(tab|pal|dat|png|pl8)$")
+  install(FILES CorsixTH.lua ../LICENSE.txt DESTINATION ${CORSIX_TH_DATADIR})
+
+  if(FETCH_SOUNDFONT)
+    install(FILES ${SOUNDFONT_FILE} DESTINATION ${CORSIX_TH_DATADIR})
+  endif()
+  if(FETCH_UNICODE_FONT)
+    install(FILES ${GONOTO_FILE} DESTINATION ${CORSIX_TH_DATADIR})
+  endif()
+
+  if(UNIX AND NOT APPLE)
+    install(FILES corsix-th.6 DESTINATION ${CMAKE_INSTALL_MANDIR}/man6)
+    install(FILES com.corsixth.corsixth.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/metainfo)
+    install(FILES com.corsixth.corsixth.desktop DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+    install(
+      FILES Original_Logo.svg
+      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps
+      RENAME corsix-th.svg
+    )
+  endif()
+
+  if(APPLE)
+    # Fix the macOS bundle to include required libraries (create a redistributable app)
+    install(
+      CODE
+        "
+      INCLUDE(BundleUtilities)
+      SET(BU_CHMOD_BUNDLE_ITEMS ON)
+      FIXUP_BUNDLE(\"${CMAKE_INSTALL_PREFIX}/CorsixTH.app\" \"\" \"\")
+      "
+    )
+    if(WITH_LUAROCKS)
+      install(
+        CODE
+          "execute_process(
+        COMMAND bash \"${CMAKE_SOURCE_DIR}/scripts/macos_luarocks\" \"${CMAKE_INSTALL_PREFIX}\")
+      "
+      )
+    endif()
+  endif()
+endif()
+
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT CorsixTH)
+
+add_custom_target(
+  windowsconfig
+  ${LUA_PROGRAM_PATH} ${CMAKE_SOURCE_DIR}/scripts/generate_windows_config.lua
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

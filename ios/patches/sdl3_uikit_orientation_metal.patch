@@ -1,0 +1,419 @@
+diff --git a/src/events/SDL_mouse.c b/src/events/SDL_mouse.c
+index eaf1f2c..bb47f60 100644
+--- a/src/events/SDL_mouse.c
++++ b/src/events/SDL_mouse.c
+@@ -1047,7 +1047,7 @@ void SDL_SendMouseWheel(Uint64 timestamp, SDL_Window *window, SDL_MouseID mouseI
+     if (SDL_EventEnabled(SDL_EVENT_MOUSE_WHEEL)) {
+         float integer_x, integer_y;
+ 
+-        if (!mouse->relative_mode || mouse->warp_emulation_active) {
++        if ((!mouse->relative_mode || mouse->warp_emulation_active) && mouseID != SDL_TOUCH_MOUSEID && mouseID != SDL_PEN_MOUSEID) {
+             // We're not in relative mode, so all mouse events are global mouse events
+             mouseID = SDL_GLOBAL_MOUSE_ID;
+         }
+diff --git a/src/video/uikit/SDL_uikitmetalview.m b/src/video/uikit/SDL_uikitmetalview.m
+index da0a8ed..75beb37 100644
+--- a/src/video/uikit/SDL_uikitmetalview.m
++++ b/src/video/uikit/SDL_uikitmetalview.m
+@@ -50,6 +50,7 @@ - (instancetype)initWithFrame:(CGRect)frame
+     if ((self = [super initWithFrame:frame])) {
+         self.tag = SDL_METALVIEW_TAG;
+         self.layer.contentsScale = scale;
++        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+         [self updateDrawableSize];
+     }
+ 
+@@ -74,6 +75,7 @@ - (void)updateDrawableSize
+         metallayer.drawableSize.height != size.height) {
+         metallayer.drawableSize = size;
+         SDL_SendWindowEvent([self getSDLWindow], SDL_EVENT_WINDOW_METAL_VIEW_RESIZED, 0, 0);
++        SDL_SendWindowEvent([self getSDLWindow], SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED, (int)size.width, (int)size.height);
+     }
+ }
+ 
+diff --git a/src/video/uikit/SDL_uikitvideo.m b/src/video/uikit/SDL_uikitvideo.m
+index 97aeb94..698580d 100644
+--- a/src/video/uikit/SDL_uikitvideo.m
++++ b/src/video/uikit/SDL_uikitvideo.m
+@@ -229,25 +229,31 @@ CGRect UIKit_ComputeViewFrame(SDL_Window *window, UIScreen *screen)
+     }
+ 
+ #ifndef SDL_PLATFORM_TVOS
+-    /* iOS 10 seems to have a bug where, in certain conditions, putting the
+-     * device to sleep with the a landscape-only app open, re-orienting the
+-     * device to portrait, and turning it back on will result in the screen
+-     * bounds returning portrait orientation despite the app being in landscape.
+-     * This is a workaround until a better solution can be found.
+-     * https://bugzilla.libsdl.org/show_bug.cgi?id=3505
+-     * https://bugzilla.libsdl.org/show_bug.cgi?id=3465
+-     * https://forums.developer.apple.com/thread/65337 */
+-    UIInterfaceOrientation orient = [UIApplication sharedApplication].statusBarOrientation;
+-    BOOL landscape = UIInterfaceOrientationIsLandscape(orient) ||
+-                    !(UIKit_GetSupportedOrientations(window) & (UIInterfaceOrientationMaskPortrait | UIInterfaceOrientationMaskPortraitUpsideDown));
+-    BOOL fullscreen = CGRectEqualToRect(screen.bounds, frame);
+-
+-    /* The orientation flip doesn't make sense when the window is smaller
+-     * than the screen (iPad Split View, for example). */
+-    if (fullscreen && (landscape != (frame.size.width > frame.size.height))) {
+-        float height = frame.size.width;
+-        frame.size.width = frame.size.height;
+-        frame.size.height = height;
++    UIWindowScene *scene = nil;
++    if (data != nil && data.uiwindow != nil && @available(iOS 13.0, *)) {
++        scene = data.uiwindow.windowScene;
++    }
++    if (!scene) {
++        scene = UIKit_GetActiveWindowScene();
++    }
++    UIInterfaceOrientation orient = UIInterfaceOrientationUnknown;
++    if (scene) {
++        orient = scene.interfaceOrientation;
++    } else {
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++        orient = [UIApplication sharedApplication].statusBarOrientation;
++#pragma clang diagnostic pop
++    }
++
++    if (orient != UIInterfaceOrientationUnknown) {
++        BOOL landscape = UIInterfaceOrientationIsLandscape(orient);
++        BOOL is_frame_landscape = (frame.size.width > frame.size.height);
++        if (landscape != is_frame_landscape) {
++            float height = frame.size.width;
++            frame.size.width = frame.size.height;
++            frame.size.height = height;
++        }
+     }
+ #endif
+ 
+diff --git a/src/video/uikit/SDL_uikitview.h b/src/video/uikit/SDL_uikitview.h
+index f6548b3..dbb5dfe 100644
+--- a/src/video/uikit/SDL_uikitview.h
++++ b/src/video/uikit/SDL_uikitview.h
+@@ -24,7 +24,7 @@
+ #include "../SDL_sysvideo.h"
+ 
+ #if !defined(SDL_PLATFORM_TVOS)
+-@interface SDL_uikitview : UIView <UIPointerInteractionDelegate>
++@interface SDL_uikitview : UIView <UIPointerInteractionDelegate, UIGestureRecognizerDelegate>
+ #else
+ @interface SDL_uikitview : UIView
+ #endif
+@@ -48,6 +48,7 @@
+ - (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event;
+ #if !defined(SDL_PLATFORM_TVOS)
+ - (IBAction)sdlPinchGesture:(UIPinchGestureRecognizer *)sender;
++- (IBAction)sdlTwoFingerPanGesture:(UIPanGestureRecognizer *)sender;
+ #endif
+ 
+ - (void)safeAreaInsetsDidChange;
+diff --git a/src/video/uikit/SDL_uikitview.m b/src/video/uikit/SDL_uikitview.m
+index d05a14a..085183c 100644
+--- a/src/video/uikit/SDL_uikitview.m
++++ b/src/video/uikit/SDL_uikitview.m
+@@ -51,12 +51,20 @@ @implementation SDL_uikitview
+ 
+ #if !defined(SDL_PLATFORM_TVOS)
+     UIPointerInteraction *indirectPointerInteraction API_AVAILABLE(ios(13.4));
++    __weak UITouch *heldTouch;
++    CGPoint heldTouchStartLocation;
++    __weak UITouch *secondTouch;
++    CGPoint secondTouchStartLocation;
++    NSTimeInterval secondTouchStartTime;
++    BOOL isTwoFingerPanning;
++    BOOL isPinching;
+ #endif
+ }
+ 
+ - (instancetype)initWithFrame:(CGRect)frame
+ {
+     if ((self = [super initWithFrame:frame])) {
++        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+ #ifdef SDL_PLATFORM_TVOS
+         // Apple TV Remote touchpad swipe gestures.
+         UISwipeGestureRecognizer *swipeUp = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(swipeGesture:)];
+@@ -82,7 +90,18 @@ - (instancetype)initWithFrame:(CGRect)frame
+         pinchGesture.cancelsTouchesInView = NO;
+         pinchGesture.delaysTouchesBegan = NO;
+         pinchGesture.delaysTouchesEnded = NO;
++        pinchGesture.delegate = self;
+         [self addGestureRecognizer:pinchGesture];
++
++        /* Two-finger Pan gestures */
++        UIPanGestureRecognizer *twoFingerPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(sdlTwoFingerPanGesture:)];
++        twoFingerPan.minimumNumberOfTouches = 2;
++        twoFingerPan.maximumNumberOfTouches = 2;
++        twoFingerPan.cancelsTouchesInView = NO;
++        twoFingerPan.delaysTouchesBegan = NO;
++        twoFingerPan.delaysTouchesEnded = NO;
++        twoFingerPan.delegate = self;
++        [self addGestureRecognizer:twoFingerPan];
+ #endif
+ 
+         self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+@@ -331,6 +350,36 @@ - (float)pressureForTouch:(UITouch *)touch
+ 
+ - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event
+ {
++#if !defined(SDL_PLATFORM_TVOS)
++    for (UITouch *touch in touches) {
++        if (@available(iOS 13.0, *)) {
++            if (touch.type == UITouchTypePencil) {
++                continue;
++            }
++        }
++        if (@available(iOS 13.4, *)) {
++            if (touch.type == UITouchTypeIndirectPointer) {
++                continue;
++            }
++        }
++
++        BOOL heldActive = (heldTouch != nil &&
++                           heldTouch.phase != UITouchPhaseEnded &&
++                           heldTouch.phase != UITouchPhaseCancelled);
++
++        if (!heldActive) {
++            heldTouch = touch;
++            heldTouchStartLocation = [touch locationInView:self];
++            secondTouch = nil;
++        } else if (secondTouch == nil && touch != heldTouch) {
++            secondTouch = touch;
++            secondTouchStartLocation = [touch locationInView:self];
++            secondTouchStartTime = [event timestamp];
++            heldTouchStartLocation = [heldTouch locationInView:self];
++        }
++    }
++#endif
++
+     for (UITouch *touch in touches) {
+ #if !defined(SDL_PLATFORM_TVOS)
+         if (@available(iOS 13.0, *)) {
+@@ -367,6 +416,70 @@ - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event
+ 
+ - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event
+ {
++#if !defined(SDL_PLATFORM_TVOS)
++    UITouch *tappingTouch = nil;
++    UITouch *targetHeldTouch = nil;
++
++    if (secondTouch && [touches containsObject:secondTouch]) {
++        tappingTouch = secondTouch;
++        if (heldTouch && heldTouch != secondTouch &&
++            heldTouch.phase != UITouchPhaseEnded &&
++            heldTouch.phase != UITouchPhaseCancelled) {
++            targetHeldTouch = heldTouch;
++        }
++    } else if (heldTouch && [touches containsObject:heldTouch]) {
++        tappingTouch = heldTouch;
++        if (secondTouch && secondTouch != heldTouch &&
++            secondTouch.phase != UITouchPhaseEnded &&
++            secondTouch.phase != UITouchPhaseCancelled) {
++            targetHeldTouch = secondTouch;
++        }
++    }
++
++    if (tappingTouch && targetHeldTouch) {
++        NSTimeInterval duration = [event timestamp] - secondTouchStartTime;
++        CGPoint tapEndLoc = [tappingTouch locationInView:self];
++        CGPoint tapStartLoc = (tappingTouch == secondTouch) ? secondTouchStartLocation : heldTouchStartLocation;
++        float tapDx = (float)(tapEndLoc.x - tapStartLoc.x);
++        float tapDy = (float)(tapEndLoc.y - tapStartLoc.y);
++        BOOL tapStationary = (tapDx * tapDx + tapDy * tapDy <= 45.0f * 45.0f);
++
++        CGPoint heldCurrentLoc = [targetHeldTouch locationInView:self];
++        CGPoint heldRefLoc = (targetHeldTouch == heldTouch) ? heldTouchStartLocation : secondTouchStartLocation;
++        float heldDx = (float)(heldCurrentLoc.x - heldRefLoc.x);
++        float heldDy = (float)(heldCurrentLoc.y - heldRefLoc.y);
++        BOOL heldStationary = (heldDx * heldDx + heldDy * heldDy <= 45.0f * 45.0f);
++
++        if (duration < 0.45 && tapStationary && heldStationary) {
++            CGPoint targetLoc = [self touchLocation:targetHeldTouch shouldNormalize:NO];
++            float x = (float)targetLoc.x;
++            float y = (float)targetLoc.y;
++            Uint64 timestamp = UIKit_GetEventTimestamp([event timestamp]);
++
++            SDL_SendMouseMotion(timestamp, sdlwindow, SDL_GLOBAL_MOUSE_ID, false, x, y);
++            SDL_SendMouseButton(timestamp, sdlwindow, SDL_GLOBAL_MOUSE_ID, SDL_BUTTON_RIGHT, true);
++            SDL_SendMouseButton(timestamp, sdlwindow, SDL_GLOBAL_MOUSE_ID, SDL_BUTTON_RIGHT, false);
++            SDL_SendMouseMotion(timestamp, sdlwindow, SDL_GLOBAL_MOUSE_ID, false, x, y);
++        }
++
++        if (tappingTouch == secondTouch) {
++            secondTouch = nil;
++        } else {
++            heldTouch = targetHeldTouch;
++            heldTouchStartLocation = [targetHeldTouch locationInView:self];
++            secondTouch = nil;
++        }
++    } else {
++        if (secondTouch && [touches containsObject:secondTouch]) {
++            secondTouch = nil;
++        }
++        if (heldTouch && [touches containsObject:heldTouch]) {
++            heldTouch = nil;
++            secondTouch = nil;
++        }
++    }
++#endif
++
+     for (UITouch *touch in touches) {
+ #if !defined(SDL_PLATFORM_TVOS)
+         if (@available(iOS 13.0, *)) {
+@@ -403,6 +516,16 @@ - (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event
+ 
+ - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event
+ {
++#if !defined(SDL_PLATFORM_TVOS)
++    if (secondTouch && [touches containsObject:secondTouch]) {
++        secondTouch = nil;
++    }
++    if (heldTouch && [touches containsObject:heldTouch]) {
++        heldTouch = nil;
++        secondTouch = nil;
++    }
++#endif
++
+     for (UITouch *touch in touches) {
+ #if !defined(SDL_PLATFORM_TVOS)
+         if (@available(iOS 13.0, *)) {
+@@ -437,6 +560,17 @@ - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event
+ 
+ - (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event
+ {
++#if !defined(SDL_PLATFORM_TVOS)
++    if (secondTouch && [touches containsObject:secondTouch]) {
++        CGPoint loc = [secondTouch locationInView:self];
++        float dx = (float)(loc.x - secondTouchStartLocation.x);
++        float dy = (float)(loc.y - secondTouchStartLocation.y);
++        if (dx * dx + dy * dy > 50.0f * 50.0f) {
++            secondTouch = nil;
++        }
++    }
++#endif
++
+     for (UITouch *touch in touches) {
+ #if !defined(SDL_PLATFORM_TVOS)
+         if (@available(iOS 13.0, *)) {
+@@ -488,27 +622,55 @@ - (IBAction)sdlPinchGesture:(UIPinchGestureRecognizer *)sender
+     switch (state) {
+ 
+         case UIGestureRecognizerStateBegan:
+-            pinch_scale = 1.0f;
++            isPinching = YES;
+             SDL_SendPinch(SDL_EVENT_PINCH_BEGIN, 0, sdlwindow, 0);
++            sender.scale = 1.0;
+             break;
+ 
+         case UIGestureRecognizerStateChanged:
+-            if (pinch_scale > 0.0f) {
+-                SDL_SendPinch(SDL_EVENT_PINCH_UPDATE, 0, sdlwindow, scale / pinch_scale);
+-            }
+-            pinch_scale = scale;
++            SDL_SendPinch(SDL_EVENT_PINCH_UPDATE, 0, sdlwindow, (float)scale);
++            sender.scale = 1.0;
+             break;
+ 
+         case UIGestureRecognizerStateFailed:
+         case UIGestureRecognizerStateEnded:
+         case UIGestureRecognizerStateCancelled:
++            isPinching = NO;
+             SDL_SendPinch(SDL_EVENT_PINCH_END, 0, sdlwindow, 0);
+             break;
+ 
+         default:
+             break;
+     }
++}
++
++- (IBAction)sdlTwoFingerPanGesture:(UIPanGestureRecognizer *)sender
++{
++    float scale = 1.0f;
++    if (sdlwindow && (sdlwindow->flags & SDL_WINDOW_HIGH_PIXEL_DENSITY)) {
++        scale = (float)self.layer.contentsScale;
++    }
++
++    if (sender.state == UIGestureRecognizerStateBegan) {
++        isTwoFingerPanning = YES;
++    } else if (sender.state == UIGestureRecognizerStateEnded || sender.state == UIGestureRecognizerStateCancelled || sender.state == UIGestureRecognizerStateFailed) {
++        isTwoFingerPanning = NO;
++    }
++
++    if (sender.state == UIGestureRecognizerStateChanged) {
++        CGPoint translation = [sender translationInView:self];
++        [sender setTranslation:CGPointZero inView:self];
+ 
++        float dx = (float)translation.x * scale;
++        float dy = (float)translation.y * scale;
++
++        SDL_SendMouseWheel(0, sdlwindow, SDL_TOUCH_MOUSEID, dx, dy, SDL_MOUSEWHEEL_NORMAL);
++    }
++}
++
++- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer
++{
++    return YES;
+ }
+ #endif
+ 
+diff --git a/src/video/uikit/SDL_uikitviewcontroller.m b/src/video/uikit/SDL_uikitviewcontroller.m
+index e9b48c2..c7675db 100644
+--- a/src/video/uikit/SDL_uikitviewcontroller.m
++++ b/src/video/uikit/SDL_uikitviewcontroller.m
+@@ -210,6 +210,14 @@ - (void)viewDidLayoutSubviews
+     int h = (int)size.height;
+ 
+     SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_RESIZED, w, h);
++
++    CGFloat scale = 1.0;
++    if (window->flags & SDL_WINDOW_HIGH_PIXEL_DENSITY) {
++        scale = self.view.layer.contentsScale;
++    }
++    int pixel_w = (int)(size.width * scale);
++    int pixel_h = (int)(size.height * scale);
++    SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED, pixel_w, pixel_h);
+ }
+ 
+ #ifndef SDL_PLATFORM_TVOS
+diff --git a/src/video/uikit/SDL_uikitwindow.m b/src/video/uikit/SDL_uikitwindow.m
+index 0ee7364..1e04cf8 100644
+--- a/src/video/uikit/SDL_uikitwindow.m
++++ b/src/video/uikit/SDL_uikitwindow.m
+@@ -59,6 +59,14 @@ static bool SetupWindowData(SDL_VideoDevice *_this, SDL_Window *window, UIWindow
+     SDL_UIKitDisplayData *displaydata = (__bridge SDL_UIKitDisplayData *)display->internal;
+     SDL_uikitview *view;
+ 
++    SDL_UIKitWindowData *data = [[SDL_UIKitWindowData alloc] init];
++    if (!data) {
++        return SDL_OutOfMemory();
++    }
++
++    data.uiwindow = uiwindow;
++    window->internal = (SDL_WindowData *)CFBridgingRetain(data);
++
+ #ifdef SDL_PLATFORM_VISIONOS
+     CGRect frame = UIKit_ComputeViewFrame(window);
+ #else
+@@ -68,15 +76,6 @@ static bool SetupWindowData(SDL_VideoDevice *_this, SDL_Window *window, UIWindow
+     int width = (int)frame.size.width;
+     int height = (int)frame.size.height;
+ 
+-    SDL_UIKitWindowData *data = [[SDL_UIKitWindowData alloc] init];
+-    if (!data) {
+-        return SDL_OutOfMemory();
+-    }
+-
+-    window->internal = (SDL_WindowData *)CFBridgingRetain(data);
+-
+-    data.uiwindow = uiwindow;
+-
+ #ifndef SDL_PLATFORM_VISIONOS
+     if (displaydata.uiscreen != [UIScreen mainScreen]) {
+         window->flags &= ~SDL_WINDOW_RESIZABLE;   // window is NEVER resizable
+@@ -179,6 +178,7 @@ bool UIKit_CreateWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_Properti
+             }
+             if (scene) {
+                 uiwindow = [[UIWindow alloc] initWithWindowScene:scene];
++                uiwindow.frame = scene.coordinateSpace.bounds;
+             }
+         }
+         if (!uiwindow) {
