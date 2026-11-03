@@ -33,7 +33,7 @@ local Announcer = _G["Announcer"]
 
 -- Factor to multiply pinch_zoom scale by, bigger number results in
 -- faster zoom changes
-local pinch_zoom_sensitivity = 1
+local pinch_zoom_sensitivity = 20
 
 -- The maximum distance to shake the screen from the origin during an
 -- earthquake with full intensity.
@@ -805,7 +805,7 @@ end
 --!param scale (number) The scale change since the last SDL_EVENT_PINCH_UPDATE.
 --!                     Scale < 1 is "zoom out". Scale > 1 is "zoom in"
 function GameUI:onPinchUpdate(scale)
-  local delta = (scale - 1) * 20
+  local delta = (scale - 1) * pinch_zoom_sensitivity
   if math.abs(delta) > 0.001 then
     self.app.world:adjustZoom(delta)
   end

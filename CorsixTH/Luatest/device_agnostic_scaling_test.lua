@@ -124,7 +124,7 @@ local function compute_button_layout(panel_w, base_w, has_machine_btn)
 end
 
 -- Test standard 640px panel (desktop / unscaled / landscape)
-local pos_std, sp_std, compact_std, right_std = compute_button_layout(640, 640, false)
+local pos_std, _, compact_std, right_std = compute_button_layout(640, 640, false)
 assert_eq(compact_std, false, "640px panel is not compact")
 assert_eq(pos_std[1], 364, "Button 1 position is 364")
 assert_eq(pos_std[7], 597, "Button 7 position is 597")
@@ -132,7 +132,7 @@ assert_eq(right_std <= 640, true, "All buttons fit within 640px width")
 
 -- Test iPhone 18 Pro / 17 Pro in portrait at 3x scale:
 -- scr_w = 1206, scale = 3 => available_w = 1206 / 3 = 402 px
-local pos_402, sp_402, compact_402, right_402, ultra_402, y_402 = compute_button_layout(402, 640, false)
+local pos_402, _, _, right_402, ultra_402, y_402 = compute_button_layout(402, 640, false)
 assert_eq(ultra_402, true, "402px panel is ultra compact (< 550px)")
 assert_eq(y_402, -42, "Submenu buttons positioned in row 2 (y = -42)")
 assert_eq(pos_402[1] >= 10, true, "Row 2 buttons comfortably centered (start >= 10)")
@@ -140,7 +140,7 @@ assert_eq(right_402 <= 402, true, "All row 2 buttons fit within 402px (last righ
 
 -- Test iPhone 15/16 in portrait at 3x scale:
 -- scr_w = 1179, scale = 3 => available_w = 1179 / 3 = 393 px
-local pos_393, sp_393, compact_393, right_393, ultra_393, y_393 = compute_button_layout(393, 640, false)
+local _, _, _, right_393, ultra_393, _ = compute_button_layout(393, 640, false)
 assert_eq(ultra_393, true, "393px panel is ultra compact (< 550px)")
 assert_eq(right_393 <= 393, true, "All row 2 buttons fit within 393px (last right: " .. tostring(right_393) .. " <= 393)")
 
@@ -154,7 +154,7 @@ assert_eq(sp_603 >= 26, true, "Button spacing is >= 26px touch target")
 
 -- Test iPad 11-inch in portrait at 2x scale:
 -- scr_w = 1668, scale = 2 => available_w = 834 px
-local pos_834, sp_834, compact_834, right_834 = compute_button_layout(834, 640, false)
+local pos_834, _, compact_834, _ = compute_button_layout(834, 640, false)
 assert_eq(compact_834, false, "834px panel is not compact (>= 640px)")
 assert_eq(pos_834[7], 597, "Last button remains at default position on iPad")
 

@@ -88,8 +88,8 @@ function UIBottomPanel:drawPanels()
   self:addPanel(12, 364, 0)
 
   local scr_w, scr_h = TheApp.video:getRenderSize()
-  local s = TheApp.gfx:getUIScale()
-  local available_w = math.floor(scr_w / s)
+  local ui_scale = TheApp.gfx:getUIScale()
+  local available_w = math.floor(scr_w / ui_scale)
   local is_portrait = scr_h > scr_w
 
   local base_w = self:machineMenuButtonExists() and 676 or 640
